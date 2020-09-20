@@ -1,0 +1,186 @@
+/*
+	Author: Prasenjit Mondal
+*/
+
+#define MAX_ITERATIONS 500
+#define RAY_MARCH_EPSILON 0.0001
+
+/////////////////////  sdfs  ////////////////////////////////
+float sdPlane(vec3 p) {
+	return p.y;
+}
+
+float sdSphere(vec3 p, float r) {return length(p) - r;}
+
+float sdBox(vec3 p, vec3 b) {
+  vec3 d = abs(p) - b;
+  return min(max(d.x,max(d.y,d.z)),0.0) + length(max(d,0.0));
+}
+
+float sdTorus(vec3 p, vec2 t) {
+  vec2 q = vec2(length(p.xz)-t.x,p.y);
+  return length(q)-t.y;
+}
+
+float sdCone(vec3 p, vec3 c) {
+    vec2 q = vec2( length(p.xz), p.y );
+    float d1 = -q.y-c.z;
+    float d2 = max( dot(q,c.xy), q.y);
+    return length(max(vec2(d1,d2),0.0)) + min(max(d1,d2), 0.);
+}
+
+float sdCylinder(vec3 p, vec2 h) {
+  vec2 d = abs(vec2(length(p.xz),p.y)) - h;
+  return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+}
+
+vec4 unionPrimitive(vec4 o1, vec4 o2) {
+	return (o1.x < o2.x) ? o1 : o2;
+}
+
+vec4 intersectionPrimitive(vec4 o1, vec4 o2) {
+	return (o1.x > o2.x) ? o1 : o2;
+}
+
+vec4 subtractionPrimitive(vec4 o1, vec4 o2) {
+	return (o1.x < -o2.x) ? o1 : o2; //todo
+}
+
+vec3 opRep(vec3 p, vec3 c) {
+    return mod(p,c)-0.5*c;
+}
+
+vec3 opTwist( vec3 p )
+{
+    float  c = cos(10.0*p.y+10.0);
+    float  s = sin(10.0*p.y+10.0);
+    mat2   m = mat2(c,-s,s,c);
+    return vec3(m*p.xz,p.y);
+}
+
+///////////////////////////////////////////////////////
+
+vec4 distanceField(vec3 p) {
+    float f = mod(floor(5.0*p.z) + floor(5.0*p.x), 2.0);
+    
+    vec3 sphereCol = vec3(1.0, 0.0, 0.0);
+    vec3 boxColor = vec3(0.0, 1.0, 0.0);
+    vec3 planeColor = 0.4 + 0.2 * f * vec3(1.0);
+    vec3 torusColor = vec3(1.0);
+    vec3 coneColor = vec3(1.0);
+    vec3 cylinderColor = vec3(1.0);
+    
+    vec4 d1 = vec4(sdPlane(p - vec3(0.0, -0.5, 0.0)), planeColor);
+    
+    vec4 d2 = vec4(sdSphere(p - vec3(-0.5, 0.0, 0.0), 0.5), sphereCol);
+    vec4 d3 = vec4(sdBox(p - vec3(0.7, 0.0, 0.0), vec3(0.4)), boxColor);
+    vec4 d4 = vec4(sdTorus(p - vec3(0.0, 0.0, 1.0), vec2(0.4, 0.1)), torusColor);
+    vec4 d5 = vec4(sdCone(p - vec3(0.7, 0.7, 0.0), vec3(0.8,0.6,0.3)), coneColor);
+    vec4 d6 = vec4(sdCylinder(p - vec3(1.0,0.30,-1.0), vec2(0.1,0.2)), cylinderColor);
+    vec4 result;
+    result = unionPrimitive(d1, d2);
+    result = unionPrimitive(result, d3);
+   	result = unionPrimitive(result, d4);
+    result = unionPrimitive(result, d5);
+    return result;
+}
+
+vec3 getNormal(vec3 p) {
+	const float eps = 0.01;
+    const vec3 dx = vec3(eps, 0.0, 0.0);
+    const vec3 dy = vec3(0.0, eps, 0.0);
+    const vec3 dz = vec3(0.0, 0.0, eps);
+    
+    float nx = distanceField(p + dx).x - distanceField(p - dx).x;
+    float ny = distanceField(p + dy).x - distanceField(p - dy).x;
+    float nz = distanceField(p + dz).x - distanceField(p - dz).x;
+    
+    return normalize(vec3(nx, ny, nz));
+}
+
+vec3 calLighting(vec3 p, vec3 rd) {
+	vec3 final;
+    float shininess = 10.0;
+    
+    //first light
+    vec3 lightPos = vec3(0.0, 5.0, 0.0);
+    vec3 lightDiffCol = vec3(1.0, 0.0, 1.0);
+    vec3 lightSpecCol = vec3(1.0, 0.0, 0.0);
+    vec3 lightDir = normalize(lightPos - p);
+    vec3 normal = getNormal(p);
+    
+    float diffuse = max(dot(normal, lightDir), 0.0);
+    vec3 halfVec = normalize(-rd + lightDir);
+    float specular = pow(max(0.0, dot(normal, halfVec)), shininess);
+    final = lightDiffCol * diffuse * 0.5 + lightSpecCol * specular; 
+    
+    //second light
+    lightPos = vec3(-5.0, 2.0, 2.0);
+    lightDiffCol = vec3(0.0, 1.0, 1.0);
+    lightSpecCol = vec3(1.0, 1.0, 1.0);
+    lightDir = normalize(lightPos - p);
+    
+    diffuse = max(dot(normal, lightDir), 0.0);
+    halfVec = normalize(-rd + lightDir);
+    specular = pow(max(0.0, dot(normal, halfVec)), shininess);
+    final += lightDiffCol * diffuse + lightSpecCol * specular;
+    
+    final = clamp(final, 0.0, 1.0);
+    return final;
+}
+
+//ray march
+vec3 rayMarch(vec3 ro, vec3 rd) {
+	float t = 0.0;
+	vec3 col = vec3(0.0);
+    
+    for(int i = 0; i < MAX_ITERATIONS; i++) {
+        vec3 p = ro + rd * t;
+        vec4 distField = distanceField(p);
+
+        if(distField.x < RAY_MARCH_EPSILON) {
+            col = distField.yzw * calLighting(p, rd);
+            break;
+        }
+
+        t += distField.x;
+    }
+    
+    return col;
+}
+
+mat3 getCamera(vec3 eye, vec3 center, vec3 up) {
+    vec3 lookDir = normalize(eye - center);
+    vec3 right = cross(up, lookDir);
+    vec3 upward = cross(lookDir, right);
+    
+    return mat3(
+    	right, upward, lookDir
+    );
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord ) {
+ 	vec2 uv = fragCoord.xy * 2.0 / iResolution.xy - 1.0;
+ 	uv.x *= iResolution.x/iResolution.y;
+    
+    vec2 mo = iMouse.xy / iResolution.xy;
+    float time = iTime * 0.5;
+    
+    vec3 right = vec3(1.0, 0.0, 0.0);
+ 	vec3 up = vec3(0.0, 1.0, 0.0);
+    vec3 forward = vec3(0.0, 0.0, -1.0);
+ 	
+    vec3 p = forward + right * uv.x + up * uv.y;
+    //vec3 eye = vec3(0.0, 1.0, 2.0);
+    vec3 eye = vec3(2.0*cos(time + 6.0*mo.x), 1.0 + 2.0*mo.y, 2.0*sin(time + 6.0*mo.x));
+	vec3 target = vec3(0.0);
+    
+    vec3 ro = eye;
+    vec3 rd = normalize(p);
+    
+    mat3 cameraMat = getCamera(ro, target, vec3(0.0, 1.0, 0.0));
+    rd = cameraMat * rd;
+    
+ 	vec3 col = rayMarch(ro, rd);
+	fragColor = vec4(col, 0.0);
+}
